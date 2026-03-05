@@ -14,11 +14,11 @@ public class ARImagePrefabSpawner : MonoBehaviour
     }
 
     [SerializeField] private ARTrackedImageManager trackedImageManager;
-    [SerializeField] private ARAnchorManager anchorManager;
     [SerializeField] private List<ImagePrefabMapping> imagePrefabMappings = new();
 
     private Dictionary<string, GameObject> spawnedPrefabs = new();
     private Dictionary<string, ARAnchor> worldAnchors = new();
+    private Dictionary<ARTrackedImage, GameObject> TrackedPrefab { get; set; }
 
     // Total distance in meters across all prefabs
     [SerializeField] private float totalWidth = 1.5f;
@@ -27,25 +27,19 @@ public class ARImagePrefabSpawner : MonoBehaviour
     {
         if (!trackedImageManager)
             trackedImageManager = GetComponent<ARTrackedImageManager>();
-
-        if (!anchorManager)
-            anchorManager = GetComponent<ARAnchorManager>();
+        
+        TrackedPrefab = new Dictionary<ARTrackedImage, GameObject>();
     }
 
-    private void OnEnable()
-    {
-        trackedImageManager.trackablesChanged.AddListener(OnImagesChanged);
-    }
+  
 
-    private void OnDisable()
-    {
-        trackedImageManager.trackablesChanged.RemoveListener(OnImagesChanged);
-    }
-
-    private void OnImagesChanged(ARTrackablesChangedEventArgs<ARTrackedImage> args)
+    public void OnImagesChanged(ARTrackablesChangedEventArgs<ARTrackedImage> args)
     {
         foreach (var trackedImage in args.added)
             CreateIndependentAnchor(trackedImage);
+        
+        foreach (var trackedImage in args.updated)
+            OnARImageUpdated(trackedImage);
     }
 
     private async void CreateIndependentAnchor(ARTrackedImage trackedImage)
@@ -61,9 +55,9 @@ public class ARImagePrefabSpawner : MonoBehaviour
             return;
         }
 
-        Pose pose = new Pose(trackedImage.transform.position, trackedImage.transform.rotation);
+        /*Pose pose = new Pose(trackedImage.transform.position, Quaternion.Euler(0,0,0));
 
-        var result = await anchorManager.TryAddAnchorAsync(pose);
+       var result = await anchorManager.TryAddAnchorAsync(pose);
         if (!result.status.IsSuccess())
         {
             Debug.LogError("Anchor creation failed: " + result.status);
@@ -72,13 +66,15 @@ public class ARImagePrefabSpawner : MonoBehaviour
 
         ARAnchor worldAnchor = result.value;
         worldAnchors[imgName] = worldAnchor;
-
-        GameObject instance = Instantiate(prefab, worldAnchor.transform);
+*/
+        GameObject instance = Instantiate(prefab, trackedImage.transform.position, Quaternion.identity);
         instance.name = $"{imgName}_Instance";
 
+        TrackedPrefab.Add(trackedImage, instance);
+        
         // Calculate evenly spaced offsets
         Vector3 prefabOffset = CalculateOffset(imgName);
-        instance.transform.localPosition = trackedImage.transform.rotation * prefabOffset;
+        instance.transform.localPosition = new Vector3(trackedImage.transform.position.x, trackedImage.transform.position.y, trackedImage.transform.position.z);
         instance.transform.localRotation = Quaternion.identity;
 
         spawnedPrefabs[imgName] = instance;
@@ -86,6 +82,36 @@ public class ARImagePrefabSpawner : MonoBehaviour
         Debug.Log($"{imgName} placed with independent world anchor at offset {prefabOffset}.");
     }
 
+
+    private void OnARImageUpdated(ARTrackedImage trackedImage)
+    {
+        if (trackedImage.trackingState == TrackingState.Tracking)
+        {
+            if (TrackedPrefab[trackedImage].TryGetComponent(out ARAnchor anchor))
+            {
+                Destroy(anchor);
+            }
+            
+            string imgName = trackedImage.referenceImage.name;
+            Vector3 prefabOffset = CalculateOffset(imgName);
+            TrackedPrefab[trackedImage].transform.position = trackedImage.transform.position;
+            TrackedPrefab[trackedImage].transform.localPosition = new Vector3(
+                trackedImage.transform.position.x, trackedImage.transform.position.y,
+                trackedImage.transform.position.z);
+            TrackedPrefab[trackedImage].transform.localRotation = Quaternion.identity;
+        }
+
+        if (trackedImage.trackingState == TrackingState.Limited)
+        {
+            if (TrackedPrefab[trackedImage].TryGetComponent(out ARAnchor anchor))
+            {
+                return;
+            }
+
+            TrackedPrefab[trackedImage].AddComponent<ARAnchor>();
+        }
+    } 
+    
     private GameObject GetPrefab(string name)
     {
         foreach (var mapping in imagePrefabMappings)
